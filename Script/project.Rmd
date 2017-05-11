@@ -1,0 +1,340 @@
+---
+title: "Project_khan"
+author: "Firasath Ali Khan"
+date: "April 27, 2017"
+output: html_document
+---
+CARDIOTOCOGRAPHY : Evaluating fetal status to avoid surgical intervention.
+
+Goal : An improper CTG measure could suggest possibility of having  to deliver through Caesarean section. Hence the goal of these models is to ensure accurate prediction of fetal well-being the CTG needs to be appropriately interpreted. 
+
+
+Source: http://archive.ics.uci.edu/ml/datasets/Cardiotocography?iframe=true&width=100%&height=100% 
+
+The dataset includes a total of 2126 samples and 40 attributes. the variable we are mst interestd is the NSP where the results of the output given by CTG were classified by 3 expert obstreticians who based their diagoses on below 21 variables. I have only included this 21 variables in my dataset for model evaluation. 
+1.  LB	Baseline value. 		
+2.  AC	accelerations. 		
+3.  FM	foetal movement. 		
+4.  UC	uterine contractions. 
+5.  DL	light decelerations.	
+6.  DS	severe decelerations.	
+7.  DP	Prolonged decelerations.	
+8.  ASTV	percentage of time with abnormal short term variability.	
+9.  MSTV	mean value of short term variability.  	
+10. ALTV	percentage of time with abnormal long term variability.  	
+11. MLTV	mean value of long term variability.  	
+12. Width	histogram width.
+13. Min	low freq. of the histogram.
+14. Max	high freq. of the histogram.
+15. Nmax	number of histogram peaks.
+16. Nzeros	number of histogram zeros.
+17. Mode	histogram mode.
+18. Mean	histogram mean.
+19. Median	histogram median.
+20. Variance	histogram variance.
+21. Tendency	histogram tendency: -1=left asymmetric; 0=symmetric; 1=right asymmetric.
+22. NSP	Normal=1; Suspect=2; Pathologic=3.
+
+
+```{r, include=FALSE}
+getwd()
+setwd("G:/Rockhurst spring/ADM/Project/data")
+ctg<-read.csv("G:/Rockhurst spring/ADM/Project/data/Cardiotocographic_NSP.csv")
+ctg$NSP<-as.factor(ctg$NSP)
+ctg1<-ctg[c(1:21,23)]
+```
+
+Abstract: 
+Asessing cardiotocography is crucial in that it leads to identifying fetuses which suffer from lack of oxygen, i.e. hypoxia. This situation is defined as fetal distress and requires fetal intervention in order to prevent fetus death or other neurological disease caused by hypoxia. Different Models were created and based on different metrics Bagging model was choosen as the recommended model to predict the outcome of the readings provided by the CTG machine.
+
+Models Created :
+1) Decision tree using rpart and caret.
+2) Multinomial Regression.
+3) Bagging Model.
+4) Random Forest Model.
+```{r, include=FALSE}
+library(MASS)
+library(rpart)
+library(rpart.plot)
+library(partykit)
+library(party)
+library(caret)
+library(nnet)
+library(adabag)
+library(randomForest)
+```
+
+I have randomized the observations and took 1700 observations(80% of the dataset) in my Training set and the remaining observations in my Test set.
+```{r}
+set.seed(123)
+ctg_random1 <- ctg1[order(runif(2126)), ] # randomize observations
+ctg_rand1 <- sample(1:2126, 1700) # 1700 observations in training and the rest in test set. An 80-20 split of the dataset.
+train1 <- ctg1[ctg_rand1,]
+test1  <- ctg1[-ctg_rand1,]
+```
+First Model Using rpart and caret package.
+Decision tree using gini. The decision tree shows Importance of variables. The Variable on the top is highly important and the as you go lower the importnace of variables also lowers. This process repeats untill a leaf node/ end result is reached.
+
+I am making the model Using train set and fitting it on the test set, I have Inclued the Accuracy, sensitivity and specificity for convinience. 
+
+
+
+```{r}
+set.seed(123)
+NSP.rpart1<-rpart(train1$NSP ~ ., method="class", parms=list(split="gini"), data=train1)
+rpart.plot(NSP.rpart1, type=4, extra=101, cex = 0.7)
+
+NSP.party1<-as.party(NSP.rpart1)
+plot(NSP.party1)
+
+#Validating
+
+actual1 <- test1$NSP 
+NSP_predicted1 <- predict(NSP.rpart1, newdata=test1, type="class") 
+NSP_results.matrix1 <- confusionMatrix(NSP_predicted1, actual1, positive="yes") 
+print(NSP_results.matrix1) # Accuracy-90.38, Sensitivity-96.98 and specificity 68.42
+#1-sum(diag(NSP_results.matrix1))/sum(NSP_results.matrix1)
+```
+I have validated my decision tree using K-fold cross validation. Doing this I can know the appropriate coplexity parameter that can be used to prune the tree which will Improve the performance of the model. Here the cp-value that i have used to prune the decision tree is 0.01152482, Although it did not help in improving the performance of the model.
+
+Validating the Decision Tree using k-fold cross validation
+```{r}
+set.seed(123)
+cvCtrl <- trainControl(method="cv", number=10) #Here I am using 10 folds to pick a Decision tree that I judge is best suitable.
+
+ctg.caret.10folds<-train(NSP ~., data=train1, method="rpart", metric="Accuracy", tuneLength=10, trControl=cvCtrl)
+
+#Here I am using Accuracy  as my metric.
+
+ctg.caret.10folds 
+ctg.rpart.pruned<-prune(NSP.rpart1, cp=0.01152482) #prunning of the decision tree is done using the recommended cp value.The complexity parameter (cp) is used to control the size of the decision tree and to select the optimal tree size.
+rpart.plot(ctg.rpart.pruned)
+plotcp(ctg.rpart.pruned)
+
+#validate
+
+actual <- test1$NSP 
+ctg_predicted.10fold <- predict(ctg.rpart.pruned, newdata=test1, type="class") 
+ctg_results.matrix.10fold <- confusionMatrix(ctg_predicted.10fold, actual, positive="yes") 
+print(ctg_results.matrix.10fold) #Accuracy-90.38, Sensitivity-96.98 and specificity 68.42
+
+```
+It is used to predict the nominal outputs. Here As I have three levels in my target variable 1=Normal, 2=Suspect and 3=Pathologic, I am setting 1 as my reference level which will be used to compare other levels of my target variable.
+
+ Multinomial Regression
+```{r}
+mydata<-ctg1
+str(mydata)
+mydata$NSPF<-factor(mydata$NSP)
+mydata$out<relevel(mydata$NSP, ref="1")
+mymodel<-multinom(NSP~., data=train1)
+summary(mymodel)
+
+#Prediction
+
+predict(mymodel,train1, type="prob")
+```
+The Diagonal values in the confusion Marix are correct classification and all non-diagonal values are misclassifications. If I sum up all the misclassification values and divide it by total numer of obserations I have my misclassification error which in this case is 9.4%.
+```{r}
+cm<-table(predict(mymodel), train1$NSP)
+print(cm)
+
+1-sum(diag(cm))/sum(cm)
+```
+2-tailed Z test Using coefficients and standard errors to intrepret the significance of variables on a 95% confidence Interval.
+```{r}
+z<-summary(mymodel)$coefficients/summary(mymodel)$standard.errors
+p<-(1-pnorm(abs(z),0,1))*2
+p
+```
+```{r}
+exp(coef(mymodel))
+options(scipen=999)
+head(pp <- fitted(mymodel))
+options(scipen=0)
+```
+
+Bagging Model
+
+```{r}
+set.seed(123) 
+
+#mtry has been set to 21, which means all independent variables are to be considered at each split. 
+
+NPbag <- randomForest(NSP ~., data=train1, mtry=21, na.action=na.omit, importance=TRUE)
+
+print(NPbag) #OOB error rate. 6.18%.
+importance(NPbag) # shows the importance of each variable. Variable importance is computed using the mean decrease in the Gini index.The important variables to consider are MSTV,Mean,ASTV,ALTV and UC.
+varImpPlot(NPbag) # shows the importance of each variable. Variable importance is computed using the mean decrease in the Gini index mean dec in Gini.
+
+# Validating 
+
+actual <- test1$NSP
+NSP_predicted.bag <- predict(NPbag, newdata=test1, type="class") 
+NSP_results.matrix.bag <- confusionMatrix(NSP_predicted.bag, actual, positive="yes") 
+print(NSP_results.matrix.bag)
+# Accuracy 94.6 
+# sensitivity class1-98.7, cass2-73.3, class3-91.4
+#Specificity Class1-82.1,  class2-98.63, class3-99.74
+```
+RandomForest Model
+```{r}
+NSP.RForest <- randomForest(NSP ~.,data=train1, mtry=3, ntree=500,na.action = na.omit, importance=TRUE) 
+print(NSP.RForest) #OOB 6%
+importance(NSP.RForest) #shows the importance of each variable.The important variables to consider are ASTV,MSTV,Mean,ALTV and UC.
+varImpPlot(NSP.RForest) #plots the importance of each variable
+
+#Validating
+
+actual <- test1$NSP 
+NSP.RForest_predict<-predict(NSP.RForest, test1 ,type="response") 
+NSP.RForest_results.matrix <- confusionMatrix(NSP.RForest_predict, actual,positive="yes") 
+print(NSP.RForest_results.matrix) #Accuracy 92.96, sensitivity class1-98.49, class2-70.0, class3-80.0 specificity: class1-80.0, class2-97.26, class3-99.74
+
+```
+
+
+Tweaking parameters :
+I have tried changing number of variables to be considered at each split from 3-7 and Number of trees from 350-700. I have considered the parameter that has given me a satisfactory improvement of the performance in the model.
+```{r}
+NSP.RForest1 <- randomForest(NSP ~.,data=train1, mtry=3, ntree=400,na.action = na.omit, importance=TRUE) 
+print(NSP.RForest1) #OOB 6.06%
+importance(NSP.RForest1) 
+varImpPlot(NSP.RForest1) 
+
+#Validating
+
+actual <- test1$NSP 
+NSP.RForest_predict<-predict(NSP.RForest1, test1 ,type="response") 
+NSP.RForest_results.matrix <- confusionMatrix(NSP.RForest_predict, actual,positive="yes") 
+print(NSP.RForest_results.matrix) #Accuracy 93.43, sensitivity class1-98.79, class2-73.3, class3-77.14 specificity: class1-80.0, class2-97.54, class3-100.0
+
+```
+Number of variables to be considered at each split = 3
+Number of trees = 700
+```{r}
+NSP.RForest2 <- randomForest(NSP ~.,data=train1, mtry=3, ntree=700,na.action = na.omit, importance=TRUE) 
+print(NSP.RForest2) #OOB 6.29%
+importance(NSP.RForest2) 
+varImpPlot(NSP.RForest2) 
+
+#Validating
+
+actual <- test1$NSP 
+NSP.RForest_predict<-predict(NSP.RForest2, test1 ,type="response") 
+NSP.RForest_results.matrix <- confusionMatrix(NSP.RForest_predict, actual,positive="yes") 
+print(NSP.RForest_results.matrix) #Accuracy 92.96, sensitivity class1-99.09, class2-68.33, class3-77.14 specificity: class1-77.89, class2-97.81, class3-99.74
+```
+Number of variables to be considered at each split = 4
+Number of trees = 350
+```{r}
+NSP.RForest3 <- randomForest(NSP ~.,data=train1, mtry=4, ntree=350,na.action = na.omit, importance=TRUE) 
+print(NSP.RForest3) #OOB 6.06%
+importance(NSP.RForest3) 
+varImpPlot(NSP.RForest3) 
+
+#Validating
+
+actual <- test1$NSP 
+NSP.RForest_predict<-predict(NSP.RForest3, test1 ,type="response") 
+NSP.RForest_results.matrix <- confusionMatrix(NSP.RForest_predict, actual,positive="yes") 
+print(NSP.RForest_results.matrix) #Accuracy 94.37, sensitivity class1-98.79, class2-75.0, class3-85.7 specificity: class1-84.21, class2-97.81, class3-99.74
+print(NSP_results.matrix.bag)
+```
+Number of variables to be considered at each split = 5
+Number of trees = 600
+```{r}
+NSP.RForest4 <- randomForest(NSP ~.,data=train1, mtry=5, ntree=600,na.action = na.omit, importance=TRUE) 
+print(NSP.RForest4) #OOB 5.82%
+importance(NSP.RForest4) 
+varImpPlot(NSP.RForest4) 
+
+#Validating
+
+actual <- test1$NSP 
+NSP.RForest_predict<-predict(NSP.RForest4, test1 ,type="response") 
+NSP.RForest_results.matrix <- confusionMatrix(NSP.RForest_predict, actual,positive="yes") 
+print(NSP.RForest_results.matrix) #Accuracy 93.43, sensitivity class1-98.49, class2-70.0, class3-85.71 specificity: class1-80.0, class2-97.81, class3-99.74
+print(NSP_results.matrix.bag)
+```
+Number of variables to be considered at each split = 3
+Number of trees = 100
+```{r}
+NSP.RForest5 <- randomForest(NSP ~.,data=train1, mtry=3, ntree=100,na.action = na.omit, importance=TRUE) 
+print(NSP.RForest5) #OOB 6%
+importance(NSP.RForest5) 
+varImpPlot(NSP.RForest5) 
+
+#Validating
+
+actual1 <- test1$NSP 
+NSP.RForest_predict1<-predict(NSP.RForest5, test1 ,type="response") 
+NSP.RForest_results.matrix1 <- confusionMatrix(NSP.RForest_predict1, actual1,positive="yes") 
+print(NSP.RForest_results.matrix1) #Accuracy 92.96, sensitivity: class1-98.49, class2-70.0, class3-80.0 specificity: class1-80.0, class2-97.26, class3-99.74
+print(NSP_results.matrix.bag)
+print(NSP.RForest1)
+```
+Number of variables to be considered at each split = 7
+Number of trees = 400
+```{r}
+
+NSP.RForest6 <- randomForest(NSP ~.,data=train1, mtry=7, ntree=400,na.action = na.omit, importance=TRUE) 
+print(NSP.RForest6) #OOB 5.29
+importance(NSP.RForest6) 
+varImpPlot(NSP.RForest6) 
+
+#Validating
+
+actual2 <- test1$NSP 
+NSP.RForest_predict2<-predict(NSP.RForest6, test1 ,type="response") 
+NSP.RForest_results.matrix2 <- confusionMatrix(NSP.RForest_predict2, actual2,positive="yes") 
+print(NSP.RForest_results.matrix2) #Accuracy: 94.37, sensitivity: class1-98.49, cl2ass 2-73.33, class3-91.42 specificity: class1-82.11, class2-98.36,class3-99.74
+print(NSP_results.matrix.bag)
+```
+Number of variables to be considered at each split = 7
+Number of trees = 550
+```{r}
+NSP.RForest7 <- randomForest(NSP ~.,data=train1, mtry=7, ntree=550,na.action = na.omit, importance=TRUE) 
+print(NSP.RForest7) #OOB 5.29
+importance(NSP.RForest7) 
+varImpPlot(NSP.RForest7) 
+
+#Validating
+
+actual2 <- test1$NSP 
+NSP.RForest_predict2<-predict(NSP.RForest7, test1 ,type="response") 
+NSP.RForest_results.matrix2 <- confusionMatrix(NSP.RForest_predict2, actual2,positive="yes") 
+print(NSP.RForest_results.matrix2) #Accuracy 93.66, sensitivity class1-98.19 class2-73.33 class3-85.7 specificity class1 81.05 class2-97.81 class3 99.74
+print(NSP_results.matrix.bag)
+```
+Peer- "Great presentation.Possibly try a boosting model to see if sensitivity will be lower than bagging model"
+
+Peer recommended Boosting Model: 
+
+Boosting Model- I have pruned the decision tree using recommended cp-value, however It did not Improve the Accuracy of the model and Sensitivity of target variable further went down.
+```{r}
+set.seed(123)
+cvCtrl <- trainControl(method="boot", number=10) 
+NSP.boost<-train(NSP ~., data=train1, method="rpart", metric="Accuracy", tuneLength=10, trControl=cvCtrl)
+NSP.boost
+NSP.rpart.pruned.boot<-prune(NSP.rpart1, cp=0.009751773)
+rpart.plot(NSP.rpart.pruned.boot)
+
+
+# validating.
+
+actual <- test1$NSP 
+NSP_predicted.boot <- predict(NSP.rpart.pruned.boot, newdata= test1, type="class") 
+NSP_results.matrix.boot <- confusionMatrix(NSP_predicted.boot, actual, positive="yes") 
+print(NSP_results.matrix.boot)
+# Accuracy of 90.38, Sensitivity of class 1-96.98, Class 2-51.6, class 3-94.28 and Specificty of Class 1-68.42, Class 2-98.63 and Class 3-98.46.
+```
+
+Preferred Model:
+      Bagging Model is my preferred model as it has high Accuracy and high Sensitivity in Class 2(Suspect) and class3(Pathologic) levels of my target variable.
+  
+Recommendations:
+-The correct determination of state of fetus is especially important for early intervention of required cases,      i.e. fetal distress or preventing unnecessary surgeries. 
+-Most people are often prone to make mistakes during analysis or, possibly, when trying to establish               relationships between multiple features. This makes it difficult for them to find solutions to certain          problems.The discussed models can be successfully applied to these problems.
+-These models can also aid in improving the efficiency of systems and the designs of machines.
+-Variables such as - Percentage of time with abnormally short and abnormally long term Variability (ASTV and       ALTV), Uterine contractions (UC) are Important and Doctors need to be more careful when looking at their        readings.
